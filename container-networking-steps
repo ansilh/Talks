@@ -1,0 +1,174 @@
+# Add a free NIC for bridge example 
+
+# Create container using busybox
+
+
+
+1.Create container root file system
+
+mkdir -p container-demo-01/{bin,proc,sys,tmp}
+mkdir -p container-demo-02/{bin,proc,sys,tmp}
+cd container-demo-0?
+
+2.Download busybox
+
+curl -LO https://raw.githubusercontent.com/ansilh/container-from-scratch/main/bins/busybox
+
+3.Create symlink for bins
+chmod +x busybox
+for i in $(./busybox --list)
+do
+   ln -s /busybox bin/$i
+done
+
+cd ..
+
+chroot container-demo-01 /busybox sh
+chroot container-demo-02 /busybox sh
+
+export PATH=/bin
+ps aux 
+mount -t proc proc /proc
+
+
+This step can be considered as the equivalent of "exec" in docker or kubectl
+
+
+3.Start container in differnt namespaces 
+
+PATH=${PATH}:/bin unshare --mount --uts --ipc --net --pid --fork --user --map-root-user --mount-proc chroot container-demo-01 /bin/sh
+PATH=${PATH}:/bin unshare --mount --uts --ipc --net --pid --fork --user --map-root-user --mount-proc chroot container-demo-02 /bin/sh
+
+
+# Create veth pair
+
+ip link add vethlocal type veth  peer name vethNS
+
+# For VXLAN , change MTU 
+
+ip link set dev vethNS mtu 1450
+ip link set dev vethlocal mtu 1450
+
+# Add one device to a container
+
+
+ps -ef |grep '/bin/sh'
+ip link set vethNS netns 1415
+
+
+# Assign IP address (bridge)
+
+ip addr add 10.5.19.10/24 dev vethNS
+ip link set lo up
+ip link set dev vethNS up
+ip link set dev vethlocal up
+
+# Assign IP address (vxlan)
+
+awk -F "=" '$1 ~ /^FLANNEL_SUBNET/{print $2}' /var/run/flannel/subnet.env | awk -F "." '{print $1"."$2"."$3"."10}'
+
+ip addr add {IP}/24 dev vethNS
+ip link set lo up
+ip link set dev vethNS up
+
+ip link set dev vethlocal up
+
+# Create Bridge
+
+./busybox brctl addbr cbr0
+./busybox brctl addif cbr0 enp0s8
+./busybox brctl show
+./busybox brctl addif cbr0 vethlocal
+ip link set dev cbr0 up
+
+# Note:- Enable promescous mode
+
+cat /var/run/flannel/subnet.env
+ip addr add 10.5.19.1/24 dev cbr0 
+
+ip route add default via 10.5.19.1
+
+### Etcd installation 
+
+ETCD_VER=v3.5.0
+
+# choose either URL
+DOWNLOAD_URL=https://storage.googleapis.com/etcd
+
+
+curl -L ${DOWNLOAD_URL}/${ETCD_VER}/etcd-${ETCD_VER}-linux-amd64.tar.gz -o /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
+mkdir /opt/etcd
+tar xzvf /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz -C /opt/etcd --strip-components=1
+rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
+
+nohup /opt/etcd/etcd -listen-client-urls=http://192.168.56.21:2379 --advertise-client-urls=http://192.168.56.21:2379 >/var/log/etcd.log 2>&1 &
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 member list -w table
+
+## Falnneld setup 
+
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 put /coreos.com/network/config '{ "Network": "10.5.0.0/16", "Backend": {"Type": "vxlan"}}'
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 get /coreos.com/network/config 
+
+
+mkdir /opt/flannel
+curl -L https://raw.githubusercontent.com/ansilh/container-from-scratch/main/bins/flanneld -o /opt/flannel/flanneld && chmod +x /opt/flannel/flanneld
+nohup /opt/flannel/flanneld --ip-masq=true --etcd-endpoints=http://192.168.56.21:2379 --public-ip=192.168.56.21  >/var/log/flannel.log 2>&1 &
+nohup /opt/flannel/flanneld --etcd-endpoints=http://192.168.56.21:2379 --public-ip=192.168.56.21  >/var/log/flannel.log 2>&1 &
+nohup /opt/flannel/flanneld --ip-masq=true --etcd-endpoints=http://192.168.56.21:2379 --public-ip=192.168.56.22  >/var/log/flannel.log 2>&1 &
+
+# Cleanup
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 get / --prefix --keys-only
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379  del /coreos.com/network/subnets/10.5.7.0-24
+
+ip -d a
+bridge fdb show
+
+mkdir /var/run/netns
+ln -sfT /proc/3885/ns/net /var/run/netns/container-demo-02
+ip netns list
+ip netns exec container-demo-01 ip link set vethNS netns 1
+ip netns exec container-demo-02 ip link set vethNS netns 1
+ip link set vethNS netns container-demo-01
+
+
+01:00:5e:00:00:01 dev enp0s3 self permanent
+33:33:00:00:00:01 dev enp0s3 self permanent
+33:33:ff:00:eb:f2 dev enp0s3 self permanent
+01:00:5e:00:00:01 dev enp0s8 self permanent
+33:33:00:00:00:01 dev enp0s8 self permanent
+33:33:ff:43:fa:f6 dev enp0s8 self permanent
+
+
+[root@flannel02 ~]# bridge fdb show
+01:00:5e:00:00:01 dev enp0s3 self permanent
+33:33:00:00:00:01 dev enp0s3 self permanent
+33:33:ff:4f:a6:b6 dev enp0s3 self permanent
+01:00:5e:00:00:01 dev enp0s8 self permanent
+33:33:00:00:00:01 dev enp0s8 self permanent
+33:33:ff:32:50:0c dev enp0s8 self permanent
+66:54:e6:28:21:91 dev flannel.1 dst 192.168.56.21 self permanent
+
+
+[root@flannel01 ~]# bridge fdb show
+01:00:5e:00:00:01 dev enp0s3 self permanent
+33:33:00:00:00:01 dev enp0s3 self permanent
+33:33:ff:00:eb:f2 dev enp0s3 self permanent
+01:00:5e:00:00:01 dev enp0s8 self permanent
+33:33:00:00:00:01 dev enp0s8 self permanent
+33:33:ff:43:fa:f6 dev enp0s8 self permanent
+ca:10:c3:a3:1e:93 dev flannel.1 dst 192.168.56.22 self permanent
+
+
+    1500 byte payload which includes the original IP header/s.
+    8 byte VXLAN header
+    8 byte UDP header
+    20 byte Outer IP header
+    14 Outer Ethernet header (Mac header)
+      = 1550.
+
+# List iptables extensions
+
+ls /lib/modules/`uname -r`/kernel/net/netfilter/xt_* 
+https://andys.org.uk/bits/2010/01/27/iptables-fun-with-mark/
+
+

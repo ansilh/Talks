@@ -1,0 +1,102 @@
+
+- Etcd installation and setup on one node
+
+ETCD_VER=v3.5.0
+
+# choose either URL
+DOWNLOAD_URL=https://storage.googleapis.com/etcd
+
+
+curl -L ${DOWNLOAD_URL}/${ETCD_VER}/etcd-${ETCD_VER}-linux-amd64.tar.gz -o /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
+mkdir /opt/etcd
+tar xzvf /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz -C /opt/etcd --strip-components=1
+rm -f /tmp/etcd-${ETCD_VER}-linux-amd64.tar.gz
+- Start etcd 
+nohup /opt/etcd/etcd -listen-client-urls=http://192.168.56.21:2379 --advertise-client-urls=http://192.168.56.21:2379 >/var/log/etcd.log 2>&1 &
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 member list -w table
+
+## Falnneld setup on both nodes
+
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 put /coreos.com/network/config '{ "Network": "10.5.0.0/16", "Backend": {"Type": "vxlan"}}'
+/opt/etcd/etcdctl --endpoints http://192.168.56.21:2379 get /coreos.com/network/config 
+
+
+mkdir /opt/flannel
+curl -L https://raw.githubusercontent.com/ansilh/container-from-scratch/main/bins/flanneld -o /opt/flannel/flanneld && chmod +x /opt/flannel/flanneld
+
+nohup /opt/flannel/flanneld --etcd-endpoints=http://192.168.56.21:2379 --public-ip=192.168.56.21  >/var/log/flannel.log 2>&1 &
+nohup /opt/flannel/flanneld --etcd-endpoints=http://192.168.56.21:2379 --public-ip=192.168.56.22  >/var/log/flannel.log 2>&1 &
+
+(--ip-masq=true not needed)
+
+- Create container root file system for container
+
+mkdir -p container-demo-01/{bin,proc,sys,tmp}
+mkdir -p container-demo-02/{bin,proc,sys,tmp}
+cd container-demo-0?
+
+- Download busybox
+
+curl -LO https://raw.githubusercontent.com/ansilh/container-from-scratch/main/bins/busybox
+
+- Create symlink for bins
+chmod +x busybox
+for i in $(./busybox --list)
+do
+   ln -s /busybox bin/$i
+done
+
+cd ..
+
+- Start container in differnt namespaces 
+
+PATH=${PATH}:/bin unshare --mount --uts --ipc --net --pid --fork --user --map-root-user --mount-proc chroot container-demo-01 /bin/sh
+PATH=${PATH}:/bin unshare --mount --uts --ipc --net --pid --fork --user --map-root-user --mount-proc chroot container-demo-02 /bin/sh
+
+- Create veth pair
+
+ip link add vethlocal type veth  peer name vethNS
+
+- Change MTU 
+
+ip link set dev vethNS mtu 1450
+ip link set dev vethlocal mtu 1450
+
+Notes:- 
+
+    1500 byte payload which includes the original IP header/s.
+    14 byte inner Ethernet header
+    8 byte VXLAN header
+    8 byte UDP header
+    20 byte IP header
+      = 1550.
+
+- Assign IP address (vxlan) and make interfaces up
+
+awk -F "=" '$1 ~ /^FLANNEL_SUBNET/{print $2}' /var/run/flannel/subnet.env | awk -F "." '{print $1"."$2"."$3"."10}'
+
+ip addr add {IP}/24 dev vethNS
+ip link set lo up
+ip link set dev vethNS up
+
+ip link set dev vethlocal up
+
+- Enable ip forwarding
+
+sysctl -w net.ipv4.ip_forward=1
+
+- Create bridge , add child devs and assign IP
+
+./busybox brctl addbr cbr0
+cat /var/run/flannel/subnet.env
+
+ip addr add {SUBNET}/24 dev cbr0 
+./busybox brctl addif cbr0 vethlocal
+ip link set dev cbr0 up
+
+- Add default route in container 
+cat /var/run/flannel/subnet.env
+ip route add default via {SUBNET}
+
+
+
