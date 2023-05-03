@@ -23,7 +23,7 @@ cd container-demo
 
 - Download busybox on both nodes
 ```bash
-curl -LO https://github.com/ansilh/Talks/blob/f2f427c52edad0fd96c9553955986ff930230388/bins/busybox
+curl -LO https://github.com/ansilh/Talks/raw/main/cncf-kochi-29apr2023/bins/busybox
 ```
 
 - Create symlink for bins on both nodes
