@@ -36,7 +36,7 @@ nohup /opt/etcd/etcd -listen-client-urls=http://192.168.56.21:2379 --advertise-c
 - Both node01 and node02
 ```bash
 mkdir /opt/flannel
-curl -L https://raw.githubusercontent.com/ansilh/container-from-scratch/main/bins/flanneld -o /opt/flannel/flanneld && chmod +x /opt/flannel/flanneld
+curl -L https://github.com/ansilh/Talks/blob/f2f427c52edad0fd96c9553955986ff930230388/bins/flanneld -o /opt/flannel/flanneld && chmod +x /opt/flannel/flanneld
 ```
 ```bash
 # node01
@@ -52,7 +52,7 @@ cd container-demo
 ```
 - Download busybox
 ```bash
-curl -LO https://raw.githubusercontent.com/ansilh/container-from-scratch/main/bins/busybox
+curl -LO https://github.com/ansilh/Talks/blob/f2f427c52edad0fd96c9553955986ff930230388/bins/busybox
 ```
 - Create symlink for bins
 ```bash
